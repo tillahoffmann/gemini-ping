@@ -1,0 +1,22 @@
+{
+  "name": "ttt",
+  "version": "1.0.0",
+  "description": "Tiny Team Transcription",
+  "main": "dist/userscript.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/tampermonkey": "^4.0.5",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "userscript",
+    "tampermonkey",
+    "gemini"
+  ],
+  "author": "",
+  "license": "MIT"
+}
