@@ -8,15 +8,42 @@
 // @grant        GM_xmlhttpRequest
 // ==/UserScript==
 
-function removePrefix(text: string, prefix: string): string {
-    if (text.startsWith(prefix)) {
-        text = text.substring(prefix.length);
+function getConversationTitle(): string {
+    const titleElement = document.body.querySelector(".selected > .conversation-title");
+    if (!titleElement || !titleElement.textContent) {
+        return "Google Gemini";
     }
-    return text;
+    return titleElement.textContent.trim();
+}
+
+function interceptStreamingRequest(callback: EventListenerOrEventListenerObject) {
+    // Store the original methods that we want to intercept.
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+
+    // Interface definition for modified request. We need to store the request
+    // parameters because they are not available in `send`.
+    interface PatchedXMLHttpRequest extends XMLHttpRequest {
+        _method: string;
+        _url: string;
+    }
+
+    // Overwrite open and send methods.
+    XMLHttpRequest.prototype.open = function (this: PatchedXMLHttpRequest, method: string, url: string | URL, ...args: any[]) {
+        this._method = method;
+        this._url = url.toString();
+        return originalOpen.apply(this, [method, url, ...args] as any);
+    };
+
+    XMLHttpRequest.prototype.send = function (this: PatchedXMLHttpRequest, body?: any) {
+        if (this._method.toUpperCase() === 'POST' && new URL(this._url, window.location.origin).pathname.endsWith('/StreamGenerate')) {
+            this.addEventListener('load', callback, false);
+        }
+        return originalSend.call(this, body);
+    };
 }
 
 (function () {
-
     // Download a notification sound.
     let audio: HTMLAudioElement | null = null;
     // Use GM_xmlhttpRequest to fetch the audio file because it bypasses page CSP.
@@ -35,22 +62,36 @@ function removePrefix(text: string, prefix: string): string {
         }
     });
 
-    // Periodically check if the processing status changed.
-    let processing = false;
-    setInterval(() => {
-        const stopButton = document.querySelector("[aria-label='Stop response']");
-
-        if (processing && !stopButton) {
-            // We are no longer processing, change the prefix and alert.
-            document.title = `✅ ${removePrefix(document.title, "⏳ ")}`;
-            processing = false;
-            if (audio) {
-                audio.play();
+    // Set up an observer to check if we now have a button to stop processing.
+    const TARGET_LABEL = "Stop response";
+    const TARGET_ATTR = "aria-label";
+    const observer = new MutationObserver(function (mutations: Array<MutationRecord>) {
+        for (const mutation of mutations) {
+            // We only care about aria-label changes.
+            if (mutation.attributeName !== TARGET_ATTR) {
+                continue;
             }
-        } else if (!processing && stopButton) {
-            // We have started processing, change the prefix.
-            document.title = `⏳ ${removePrefix(document.title, "✅ ")}`;
-            processing = true;
+
+            const oldValue = mutation.oldValue;
+            const newValue = (mutation.target as HTMLElement).getAttribute(TARGET_ATTR);
+            if (oldValue !== TARGET_LABEL && newValue === TARGET_LABEL) {
+                // Started processing.
+                document.title = `⏳ ${getConversationTitle()}`;
+            }
         }
-    }, 1000);
+    });
+    observer.observe(
+        document.body, { subtree: true, attributes: true, attributeOldValue: true }
+    );
+
+    // Overwrite the streaming responses to check if we're done with processing.
+    interceptStreamingRequest(() => {
+        // Finished processing.
+        document.title = `✅ ${getConversationTitle()}`;
+        if (audio) {
+            audio.play();
+        }
+    })
 })();
+
+
