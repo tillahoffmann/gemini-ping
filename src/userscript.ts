@@ -8,64 +8,15 @@
 // @grant        GM_xmlhttpRequest
 // ==/UserScript==
 
-function getConversationTitle(): string {
-    const titleElement = document.body.querySelector(".selected > .conversation-title");
-    if (!titleElement || !titleElement.textContent) {
-        return "Google Gemini";
-    }
-    return titleElement.textContent.trim();
-}
-
-function interceptStreamingRequest(onsend: () => void, onload: EventListenerOrEventListenerObject) {
-    // Store the original methods that we want to intercept.
-    const originalOpen = XMLHttpRequest.prototype.open;
-    const originalSend = XMLHttpRequest.prototype.send;
-
-    // Interface definition for modified request. We need to store the request
-    // parameters because they are not available in `send`.
-    interface PatchedXMLHttpRequest extends XMLHttpRequest {
-        _method: string;
-        _url: string;
-    }
-
-    function isStreamingRequest(request: PatchedXMLHttpRequest): boolean {
-        return (
-            request._method.toUpperCase() === 'POST'
-            && new URL(request._url, window.location.origin).pathname.endsWith('/StreamGenerate')
-        )
-    }
-
-    // Overwrite open and send methods.
-    XMLHttpRequest.prototype.open = function (this: PatchedXMLHttpRequest, method: string, url: string | URL, ...args: any[]) {
-        this._method = method;
-        this._url = url.toString();
-
-        if (isStreamingRequest(this)) {
-            onsend();
-        }
-        return originalOpen.apply(this, [method, url, ...args] as any);
-    };
-
-    XMLHttpRequest.prototype.send = function (this: PatchedXMLHttpRequest, body?: any) {
-        if (isStreamingRequest(this)) {
-            this.addEventListener('load', onload, false);
-        }
-        return originalSend.call(this, body);
-    };
-}
-
 (function () {
-    // Download a notification sound.
+    // Load the audio cue file.
     let audio: HTMLAudioElement | null = null;
-    // Use GM_xmlhttpRequest to fetch the audio file because it bypasses page CSP.
     GM_xmlhttpRequest({
         method: "GET",
         url: "http://i.cloudup.com/2OPb5OYAI2.ogg",
         responseType: "blob",
         onload: function (response) {
-            // Check for a successful response
             if (response.status >= 200 && response.status < 300) {
-                // Create a Blob from the audio data and then create an Object URL
                 const blob = response.response;
                 const audioObjectUrl = URL.createObjectURL(blob);
                 audio = new Audio(audioObjectUrl);
@@ -73,27 +24,78 @@ function interceptStreamingRequest(onsend: () => void, onload: EventListenerOrEv
         }
     });
 
-    // Overwrite the streaming responses to check if we're done with processing.
-    interceptStreamingRequest(() => {
+    // Get the title of the current conversation.
+    function getConversationTitle(): string {
+        const titleElement = document.body.querySelector(".selected > .conversation-title");
+        if (!titleElement || !titleElement.textContent) {
+            return "Google Gemini";
+        }
+        return titleElement.textContent.trim();
+    }
+
+    // Change the title when generation starts.
+    function onGenerationStart(): void {
         document.title = `⏳ ${getConversationTitle()}`;
-    }, () => {
-        // Finished processing.
+    }
+
+    // Update the title and send a notification when the generation ends.
+    function onGenerationEnd(this: XMLHttpRequest): void {
         const title = getConversationTitle();
-        document.title = `✅ ${title}`;
-        if (audio) {
-            audio.play();
+
+        const notificationOptions: NotificationOptions = {
+            icon: "https://www.google.com/images/branding/product/1x/gemini_48dp.png",
+            silent: false,
+        };
+        if (this.status >= 200 && this.status < 300) {
+            document.title = `✅ ${title}`;
+            notificationOptions.body = "Your response is ready.";
+        } else {
+            document.title = `❌ ${title}`;
+            notificationOptions.body = "Your request failed.";
         }
 
-        Notification.requestPermission().then(function (permission) {
+        // Play the notification sound regardless.
+        if (audio) {
+            audio.play().catch(e => console.error("Audio playback failed:", e));
+        }
+
+        Notification.requestPermission().then((permission: NotificationPermission) => {
             if (permission === "granted") {
-                const notification = new Notification(
-                    title, {
-                    silent: false,
-                });
-                notification.onclick = () => { window.focus() };
+                const notification = new Notification(title, notificationOptions);
+                notification.onclick = () => window.focus();
             }
         });
-    });
+    }
+
+    function interceptXhr(): void {
+        const originalOpen = XMLHttpRequest.prototype.open;
+        const originalSend = XMLHttpRequest.prototype.send;
+
+        interface PatchedXMLHttpRequest extends XMLHttpRequest {
+            _method: string;
+            _url: string;
+        }
+
+        XMLHttpRequest.prototype.open = function (this: PatchedXMLHttpRequest, method: string, url: string | URL, ...args: any[]) {
+            // Add the method and url to the patched request because we cannot identify the
+            // request details in the `send` method.
+            this._method = method;
+            this._url = url.toString();
+            return originalOpen.apply(this, [method, url, ...args] as any);
+        };
+
+        XMLHttpRequest.prototype.send = function (this: PatchedXMLHttpRequest, body?: any) {
+            const isStreamingRequest = (
+                this._method.toUpperCase() === 'POST'
+                && new URL(this._url, window.location.origin).pathname.endsWith('/StreamGenerate')
+            );
+            if (isStreamingRequest) {
+                onGenerationStart()
+                this.addEventListener("loadend", onGenerationEnd, { once: true });
+            }
+            return originalSend.call(this, body);
+        };
+    }
+
+    interceptXhr();
 })();
-
-
