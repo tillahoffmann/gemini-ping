@@ -87,11 +87,22 @@ function interceptStreamingRequest(callback: EventListenerOrEventListenerObject)
     // Overwrite the streaming responses to check if we're done with processing.
     interceptStreamingRequest(() => {
         // Finished processing.
-        document.title = `✅ ${getConversationTitle()}`;
+        const title = getConversationTitle();
+        document.title = `✅ ${title}`;
         if (audio) {
             audio.play();
         }
-    })
+
+        Notification.requestPermission().then(function (permission) {
+            if (permission === "granted") {
+                const notification = new Notification(
+                    title, {
+                    silent: false,
+                });
+                notification.onclick = () => { window.focus() };
+            }
+        });
+    });
 })();
 
 
