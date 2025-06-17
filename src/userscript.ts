@@ -16,7 +16,7 @@ function getConversationTitle(): string {
     return titleElement.textContent.trim();
 }
 
-function interceptStreamingRequest(callback: EventListenerOrEventListenerObject) {
+function interceptStreamingRequest(onsend: () => void, onload: EventListenerOrEventListenerObject) {
     // Store the original methods that we want to intercept.
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
@@ -28,16 +28,27 @@ function interceptStreamingRequest(callback: EventListenerOrEventListenerObject)
         _url: string;
     }
 
+    function isStreamingRequest(request: PatchedXMLHttpRequest): boolean {
+        return (
+            request._method.toUpperCase() === 'POST'
+            && new URL(request._url, window.location.origin).pathname.endsWith('/StreamGenerate')
+        )
+    }
+
     // Overwrite open and send methods.
     XMLHttpRequest.prototype.open = function (this: PatchedXMLHttpRequest, method: string, url: string | URL, ...args: any[]) {
         this._method = method;
         this._url = url.toString();
+
+        if (isStreamingRequest(this)) {
+            onsend();
+        }
         return originalOpen.apply(this, [method, url, ...args] as any);
     };
 
     XMLHttpRequest.prototype.send = function (this: PatchedXMLHttpRequest, body?: any) {
-        if (this._method.toUpperCase() === 'POST' && new URL(this._url, window.location.origin).pathname.endsWith('/StreamGenerate')) {
-            this.addEventListener('load', callback, false);
+        if (isStreamingRequest(this)) {
+            this.addEventListener('load', onload, false);
         }
         return originalSend.call(this, body);
     };
@@ -62,30 +73,10 @@ function interceptStreamingRequest(callback: EventListenerOrEventListenerObject)
         }
     });
 
-    // Set up an observer to check if we now have a button to stop processing.
-    const TARGET_LABEL = "Stop response";
-    const TARGET_ATTR = "aria-label";
-    const observer = new MutationObserver(function (mutations: Array<MutationRecord>) {
-        for (const mutation of mutations) {
-            // We only care about aria-label changes.
-            if (mutation.attributeName !== TARGET_ATTR) {
-                continue;
-            }
-
-            const oldValue = mutation.oldValue;
-            const newValue = (mutation.target as HTMLElement).getAttribute(TARGET_ATTR);
-            if (oldValue !== TARGET_LABEL && newValue === TARGET_LABEL) {
-                // Started processing.
-                document.title = `⏳ ${getConversationTitle()}`;
-            }
-        }
-    });
-    observer.observe(
-        document.body, { subtree: true, attributes: true, attributeOldValue: true }
-    );
-
     // Overwrite the streaming responses to check if we're done with processing.
     interceptStreamingRequest(() => {
+        document.title = `⏳ ${getConversationTitle()}`;
+    }, () => {
         // Finished processing.
         const title = getConversationTitle();
         document.title = `✅ ${title}`;
